@@ -11,7 +11,23 @@ myKeyCheck;
 
 device_type = 1; %1:viewpixx, 2:desktop(dr.room), 3:surface, 4:dell(SMI)
 
-samplerate = 500;
+stimulationTime = 10
+
+
+
+; % secs
+
+NumRepTrial = 3;
+
+P_SIZE = 1;                     % ViewPixx用トリガー用の左上正方形の大きさ設定
+
+%% For Audio output
+reqlatencyclass = 2;
+latbias = [];
+waitframes = [];
+exactstart = 1;
+buffersize = 0;     % Pointless to set this. Auto-selected to be optimal.
+suggestedLatencySecs = [];
 
 %% COLLECT SOME INFO
 % Construct a questdlg with three options
@@ -19,16 +35,11 @@ choice = questdlg('実験を開始しますか?', ...
     '参加者情報', ...
     'デモ','本番','キャンセル','キャンセル');
 % Handle response
-eye_flag = 1;
 switch choice
     case 'デモ'
         demo_flag = 1;
-        if eye_flag == 2
-            return;
-        end
     case '本番'
         demo_flag = 2;
-        
         gender = QuestionDlgForGender();
         age = choosedialogForAge([20 40]);
         
@@ -37,19 +48,11 @@ switch choice
         return;
 end
 
-%% Load the iViewX API library and connect to the server
-if eye_flag
-    addpath('SMI/');
-    InitAndConnectiViewXAPI
-end
 %% --- 前準備:
-load('newPairdata.mat');
 
 dat_dir = 'data/';
 % 実験変数
 % 各条件の試行数xセット数が各条件の全試行数
-N_trial = size(Pairdata, 2);          % 1setあたり何試行するか
-N_set = size(Pairdata, 1);      % 何セットやるか
 
 % set KeyInfo
 escapeKey = KbName('ESCAPE');
@@ -61,21 +64,67 @@ NumKey6 = KbName('6');
 
 %%
 
-Task_label = {
-    'like';
-    'dislike';
+Position_label = {
+    'Finger';
+    'Hand';
+    'List';
     };
+
+Stimulation_label = {
+    'Sine';
+    'Square';
+    };
+
+Frequency_label = [
+    14;
+    20;
+    30;
+    ];
+
+%%
+
+% Requested output frequency, may need adaptation on some audio-hw:
+freq = 44100;       % Must set this. 96khz, 48khz, 44.1khz.
+buffersize = 0;     % Pointless to set this. Auto-selected to be optimal.
+suggestedLatencySecs = [];
+
+NumLength = 1;
+
+t = [0:1/freq:NumLength];
+
+bf = 100;
+
+by = sin(2*pi*bf*t);
+
+squarewave = (square(2*pi*Frequency_label*t)+1)/2;
+sinewave = sin(2*pi*Frequency_label*t);
+
+soundwave{1} = sinewave;
+soundwave{2} = squarewave;
+
+for n_stim = 1:length(Stimulation_label)
+    for n_freq = 1:length(Frequency_label)
+        mynoise{n_stim, n_freq}(1,:) = soundwave{n_stim}(n_freq, :);
+        mynoise{n_stim, n_freq}(2,:) = soundwave{n_stim}(n_freq, :);
+        
+        % bufferhandle{n_stim, n_freq} = PsychPortAudio('CreateBuffer', [], mynoise);
+    end
+end
+
+new_mynoise = reshape(mynoise, 1, length(Frequency_label)*length(Stimulation_label));
 
 %% make order-data
 numStim = 1;
+NumOfCondtion = length(Frequency_label)*length(Stimulation_label);
 tmp_order = [];
-for i_set = 1:size(Pairdata, 1)
-    for i_stim = 1:size(Pairdata, 2)
-        tmp_order{i_set}(i_stim).ID = numStim;
-        tmp_order{i_set}(i_stim).Condition = i_set;
-        tmp_order{i_set}(i_stim).Source = Pairdata{i_set, i_stim};
-        numStim = numStim + 1;
+for i_set = 1:length(Position_label)
+    for i_stim = 1:NumOfCondtion
+        tmp_order(i_stim).ID = i_stim;
+        tmp_order(i_stim).Condition = i_stim+i_set*10;
+        tmp_order(i_stim).sounds = new_mynoise{i_stim};
+        tmp_order(i_stim).trgcol = getVPixxTriggerValue(tmp_order(i_stim).Condition);
     end
+    tmp_order2{i_set} = repmat(tmp_order, [1, NumRepTrial]);
 end
 
 %% --- fixation point
@@ -90,10 +139,7 @@ fixTime = 0.5;
 %% Stimuli infomation
 
 VisualDistance = 60; % cm
-StimulusSize = 10; % degree
 
-StimtoStimDistance = 15; % degree
-StimDistanceFromCenter = StimtoStimDistance/2; % degree
 
 %% --- subject data
 switch demo_flag
@@ -101,7 +147,7 @@ switch demo_flag
         subject.name = 'demo';
         subject.sex = 0;    % male:0, female:1
     case 2
-        EXPID = 'E02_EXP03_S08_';
+        EXPID = 'E02_EXP04_S01_';
         datenum = fix(clock);
         %         datestr = sprintf('%d%02d%02d%02d%02d',datenum(1), datenum(2), datenum(3), datenum(4), datenum(5));
         datestr = sprintf('%s%d%02d%02d',EXPID, datenum(1)-2000, datenum(2), datenum(3));
@@ -146,8 +192,8 @@ try
     end
     
     [window, windowRect]  =  PsychImaging('OpenWindow', screenNumber, gray);
-    %     [window, windowRect] = Screen('OpenWindow', screenNumber, gray);
-    copyWindow = Screen('OpenOffscreenWindow', screenNumber, windowRect);
+    
+    ifi = Screen('GetFlipInterval', window);
     
     % Coordinates of the center of the screen
     [centerPos(1), centerPos(2)] = RectCenter(windowRect);
@@ -155,23 +201,6 @@ try
     [width, height] = Screen('WindowSize', window);
     
     %
-    StimSize = VisualAngleToVisualSize(StimulusSize, VisualDistance, device_type, [width, height]);
-    stim_X1 = centerPos(1) - StimSize(1)/2;
-    stim_Y1 = centerPos(2) - StimSize(2)/2;
-    
-    Stim_cor = [stim_X1 stim_Y1 stim_X1 stim_Y1];
-    
-    %
-    StimtoStimDistance = VisualAngleToVisualSize(StimDistanceFromCenter, VisualDistance, device_type, [width, height]);
-    stim_centerpos(1, 1) = centerPos(1) - StimtoStimDistance(1) - StimSize(1)/2;
-    stim_centerpos(1, 2) = centerPos(2) - StimSize(2)/2;
-    stim_centerpos(1, 3) = centerPos(1) - StimtoStimDistance(1) + StimSize(1)/2;
-    stim_centerpos(1, 4) = centerPos(2) + StimSize(2)/2;
-    
-    stim_centerpos(2, 1) = centerPos(1) + StimtoStimDistance(1) - StimSize(1)/2;
-    stim_centerpos(2, 2) = centerPos(2) - StimSize(2)/2;
-    stim_centerpos(2, 3) = centerPos(1) + StimtoStimDistance(1) + StimSize(1)/2;
-    stim_centerpos(2, 4) = centerPos(2) + StimSize(2)/2;
     %% --- フォント設定:
     % Font setting
     if IsWin
@@ -185,7 +214,7 @@ try
         foundfont = 0;
         for idx = 1:length(allFonts)
             %if strcmpi(allFonts(idx).name, 'Hiragino Mincho Pro W3')
-            if strcmpi(allFonts(idx).name, 'Hiragino Kaku Gothic Pro W3')
+            if strcmpi(allFonts(idx).name, 'Hiragino Maru Gothic ProN W4')
                 foundfont = 1;
                 break;
             end
@@ -196,10 +225,53 @@ try
         Screen('TextFont', window, allFonts(idx).number);
     end
     % ------------------------------
+    if IsARM
+        % ARM processor, probably the RaspberryPi SoC. This can not quite handle the
+        % low latency settings of a Intel PC, so be more lenient:
+        suggestedLatencySecs = 0.025;
+        if isempty(latbias)
+            latbias = 0.000593;
+            fprintf('Choosing a latbias setting of 0.000593 secs or 0.593 msecs, assuming this is a RaspberryPi ARM SoC.\n');
+        end
+        fprintf('Choosing a high suggestedLatencySecs setting of 25 msecs to account for lower performing ARM SoC.\n');
+    end
+    
+    if IsWin
+        % Hack to accomodate bad Windows systems or sound cards. By default,
+        % the more aggressive default setting of something like 5 msecs can
+        % cause sound artifacts on cheaper / less pro sound cards:
+        suggestedLatencySecs = 0.015;
+        fprintf('Choosing a high suggestedLatencySecs setting of 15 msecs to account for shoddy Windows operating system.\n');
+        fprintf('For low-latency applications, you may want to tweak this to lower values if your system works better than average timing-wise.\n');
+    end
+    
+    % Open audio device for low-latency output:
+    pahandle = PsychPortAudio('Open', -1, [], reqlatencyclass, freq, 2, buffersize, suggestedLatencySecs);
+    
+    % Tell driver about hardwares inherent latency, determined via calibration
+    % once:
+    prelat = PsychPortAudio('LatencyBias', pahandle, latbias);
+    postlat = PsychPortAudio('LatencyBias', pahandle);
     
     % Use realtime priority for better timing precision:
     priorityLevel = MaxPriority(window);
     Priority(priorityLevel);
+    
+    % Set waitframes to a good default, if none is provided by user:
+    if isempty(waitframes)
+        % We try to choose a waitframes that maximizes the chance of hitting
+        % the onset deadline. We are conservative in our estimate, because a
+        % few video refresh cycles hardly matter for this test, but increase
+        % our chance of success without need for manual tuning by user:
+        if isempty(suggestedLatencySecs)
+            % Let's assume 12 msecs on Linux and OSX as a achievable latency by
+            % default, then double it:
+            waitframes = ceil((2 * 0.012) / ifi) + 1;
+        else
+            % Whatever was provided, then double it:
+            waitframes = ceil((2 * suggestedLatencySecs) / ifi) + 1;
+        end
+    end
     
     %% --- 呈示開始
     disp('=================== Questionarie ===================');
@@ -208,87 +280,23 @@ try
     tic;
     tstart = tic;
     
-    for i_set = 1:N_set
+    for i_set = 1:length(Position_label)
         
         %% --- セッションの始め:
         disp('====================');
-        fprintf('\n---------- Set%d ----------\n' , i_set);
-        if eye_flag
-            disp('==========CALIBRATION START==========');
-            if connected
-                
-                disp('Get System Info Data')
-                ret_sys = iView.iV_GetSystemInfo(pSystemInfoData);
-                
-                if (ret_sys == 1 )
-                    
-                    disp(pSystemInfoData.Value)
-                    samplerate = pSystemInfoData.Value.samplerate;
-                else
-                    
-                    msg = 'System Information could not be retrieved';
-                    disp(msg);
-                    
-                end
-                
-                %% Calibration
-                disp('Calibrate iViewX')
-                ret_setCal = iView.iV_SetupCalibration(pCalibrationData);
-                
-                if (ret_setCal == 1 )
-                    
-                    ret_cal = iView.iV_Calibrate();
-                    
-                    if (ret_cal == 1 )
-                        
-                        disp('Validate Calibration')
-                        ret_val = iView.iV_Validate();
-                        
-                        if (ret_val == 1 )
-                            
-                            disp('Show Accuracy')
-                            ret_acc = iView.iV_GetAccuracy(pAccuracyData, int32(0));
-                            
-                            if (ret_acc == 1 )
-                                
-                                disp(pAccuracyData.Value)
-                                
-                            else
-                                
-                                msg = 'Accuracy could not be retrieved';
-                                disp(msg);
-                            end
-                            
-                        else
-                            msg = 'Error during validation';
-                            disp(msg);
-                            
-                        end
-                        
-                    else
-                        
-                        msg = 'Error during calibration';
-                        disp(msg);
-                    end
-                else
-                    msg = 'Calibration data could not be set up';
-                    disp(msg);
-                end
-            end
-            disp('==========CALIBRATION END==========');
-            
-        end
+        fprintf('\n---------- Set%d ----------\n Device position is %sn' , i_set, Position_label{i_set});
+        
         set_tstart = tic;
         
         %% --- message
         Screen('TextSize', window, fontSize);
         Screen('FillRect', window, gray); % 背景
-        DrawFormattedText(window, double(['Please press to start the session.\nwhich one do you ', Task_label{i_set}, '?']), 'center', 'center', white);
+        DrawFormattedText(window, double(['Please press to start the session.']), 'center', 'center', white);
         Screen('Flip', window); % To present a message on the screen
         %         ListenChar(2); % Disable the key input to the Matlab
         
-        face_list = tmp_order{i_set};
-        order = face_list(randperm(length(face_list)));
+        stim_list = tmp_order2{i_set};
+        order = stim_list(randperm(length(stim_list)));
         order_data = order;
         
         while 1
@@ -315,120 +323,57 @@ try
         end
         
         %% 呈示
-        for i_trial = 1:N_trial
+        for i_trial = 1:length(order)
+            fprintf('%3d/%d\n', i_trial, length(order));
             
-            fprintf('%3d/%d\n', i_trial, N_trial);
-            
-            %% 顔を描画
-            
-            for i_face = 1:length(order(i_trial).Source)
-                Screen('FillRect', copyWindow, gray); % 背景
-                Screen('FillRect', window, gray); % 背景
-                Screen('FrameOval', window, [0 0 0], order(i_trial).Source(i_face).Position{1}.* repmat(StimSize, [1 2]) + Stim_cor, 3, 3);
-                
-                for i_cir = 2:size(order(i_trial).Source(i_face).Position, 2)
-                    Screen('FillOval', window, [0 0 0], order(i_trial).Source(i_face).Position{i_cir}.* repmat(StimSize, [1 2]) + Stim_cor);
-                end
-                
-                Screen('CopyWindow',window, copyWindow)
-                % 描画された画像を配列に
-                imageArray = Screen('GetImage', copyWindow, order(i_trial).Source(i_face).Position{1}.* repmat(StimSize, [1 2]) + Stim_cor);
-                facetex{i_face} = Screen('MakeTexture', window, imageArray);
-            end
-            
-            %% Presentation of the fixation point
-            count=1;
-            L = [];
-            R = [];
-            timeStamp = [];
-            fixData=[];
+            PsychPortAudio('FillBuffer', pahandle, order(i_trial).sounds);
             
             Screen('FillRect', window, gray); % 背景
-            Screen('DrawLines', window, fixApex, 4, white, centerPos, 0);
+            
             vbl1 = Screen('Flip', window);
-            timeforfix = GetSecs;
-            if eye_flag
-                FirstGetSample
-            end
-            while GetSecs - timeforfix < fixTime
-                if eye_flag
-                    %% Get Gaze Samples
-                    if connected
-                        GetSampleEye
-                        pause(1/samplerate);
-                    end
-                end
-            end
-            if eye_flag
-                fixData.L = L;
-                fixData.R = R;
-                fixData.time = timeStamp;
-                tmp_time = timeStamp - repmat(timeStamp(1), size(timeStamp));
-                fixData.correctedTime = round(tmp_time/1000, 0)/1000;
-            end
+            
+            tWhen = vbl1 + (waitframes - 0.5) * ifi;
+            
+            tPredictedVisualOnset = PredictVisualOnsetForTime(window, tWhen);
+            PsychPortAudio('Start', pahandle, stimulationTime, tPredictedVisualOnset, 0);
+            
             %% 刺激onset
             Screen('FillRect', window, gray); % 背景
-            face_posi = randperm(length(order(i_trial).Source));
-            for i_face = 1:length(order(i_trial).Source)
-                Screen('DrawTexture', window, facetex{face_posi(i_face)}, [], stim_centerpos(i_face, :), order(i_trial).Source(i_face).Orientation * 180);
-            end
-            vbl2 = Screen('Flip', window);
+            Screen('DrawLines', window, fixApex, 4, white, centerPos, 0);
+            Screen('FillRect', window, order(i_trial).trgcol ,[0,0, P_SIZE,P_SIZE]);
             
-            Res = 0;
-            count=1;
-            L = [];
-            R = [];
-            timeStamp = [];
-            if eye_flag
-                FirstGetSample
-            end
-            while 1
-                if eye_flag
-                    GetSampleEye
-                end
-                [x, y, buttons] = GetMouse;
-                if buttons(1) || buttons(2) || buttons(3)
-                    while any(buttons)
-                        [x, y, buttons] = GetMouse;
-                    end
+            [vbl2 visual_onset t1] = Screen('Flip', window, tWhen);
+            
+            t2 = GetSecs;
+            
+            % Spin-Wait until hw reports the first sample is played...
+            offset = 0;
+            while offset == 0
+                status = PsychPortAudio('GetStatus', pahandle);
+                offset = status.PositionSecs;
+                t3=GetSecs;
+                plat = status.PredictedLatency;
+                fprintf('Predicted Latency: %6.6f msecs.\n', plat*1000);
+                if offset>0
                     break;
                 end
-                
-                clear keyCode;
-                [keyIsDown,secs,keyCode] = KbCheck;
-                % ESCEPEで中断
-                if (keyCode(escapeKey) )
-                    Screen('CloseAll');
-                    ListenChar(0);
-                    return
-                elseif ( keyCode(NumKey4) )
-                    Res = 1;
-                    break;
-                elseif ( keyCode(NumKey5) )
-                    Res = 2;
-                    break;
-                end
-                
+                WaitSecs('YieldSecs', 0.001);
             end
             
-            %%
-            vbl3 = Screen('Flip', window);
+            audio_onset = status.StartTime;
             
-            order_data(i_trial).Res = Res;
-            order_data(i_trial).Fix = vbl2 - vbl1;
-            order_data(i_trial).RT = vbl3 - vbl2;                 % リアクションタイム
-            if eye_flag
-                order_data(i_trial).L_eye = L;
-                order_data(i_trial).R_eye = R;
-                order_data(i_trial).fixData = fixData;
-                order_data(i_trial).time = timeStamp;
-                tmp_time = timeStamp - repmat(timeStamp(1), size(timeStamp));
-                order_data(i_trial).correctedTime = round(tmp_time/1000, 0)/1000;
-            end
+            % Stop playback:
+            PsychPortAudio('Stop', pahandle, 1);
+            
+            Screen('FillRect', window, gray);
+            telapsed = Screen('Flip', window) - visual_onset;
+            
+            order_data(i_trial).vbl = vbl2 - vbl1;
+            order_data(i_trial).Flipdelay = vbl2 - vbl1;                 % リアクションタイム
+            
             Screen('FillRect', window, gray); % 背景
-            %             DrawFormattedText(window, double('Please press to start the session.'), 'center', 'center', white);
-            while KbCheck; end
-            KbWait;
+            
+            GetClicks;
         end
         toc(set_tstart);
         
@@ -443,25 +388,42 @@ try
         Screen('FillRect', window, gray); % 背景
         DrawFormattedText(window, double('finish the this session'), 'center', 'center', white);
         Screen('Flip', window); % To present a message on the screen
-        GetClicks;
+        
+        while 1
+            
+            [x, y, buttons] = GetMouse;
+            if buttons(1) || buttons(2) || buttons(3)
+                while any(buttons)
+                    [x, y, buttons] = GetMouse;
+                end
+                break;
+            end
+            
+            clear keyCode;
+            [keyIsDown,secs,keyCode] = KbCheck;
+            % ESCEPEで中断
+            if (keyCode(escapeKey) )
+                Screen('CloseAll');
+                ListenChar(0);
+                return
+            elseif ( keyCode(returnKey) )
+                break;
+            end
+            
+        end
+        
     end
     
-    %% Unload the iViewX API library and disconnect from the server
-    if eye_flag
-        UnloadiViewXAPI
-    end
+    PsychPortAudio('Close');
     Screen('CloseAll');
     Priority(0);
 catch
     %this "catch" section executes in case of an error in the "try" section
     %above.  Importantly, it closes the onscreen window if its open.
+    PsychPortAudio('Close');
     Screen('CloseAll');
     Priority(0);
     psychrethrow(psychlasterror);
-    %% Unload the iViewX API library and disconnect from the server
-    if eye_flag
-        UnloadiViewXAPI
-    end
 end %try..catch..
 %%
 if demo_flag == 2

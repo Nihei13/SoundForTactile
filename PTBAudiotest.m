@@ -11,11 +11,11 @@ reqlatencyclass = 2;
 latbias = [];
 waitframes = [];
 exactstart = 1;
+buffersize = 0;     % Pointless to set this. Auto-selected to be optimal.
+suggestedLatencySecs = [];
 
 % Requested output frequency, may need adaptation on some audio-hw:
 freq = 44100;       % Must set this. 96khz, 48khz, 44.1khz.
-buffersize = 0;     % Pointless to set this. Auto-selected to be optimal.
-suggestedLatencySecs = [];
 
 NumLength = 1;
 stimulationTime = 5; % secs
